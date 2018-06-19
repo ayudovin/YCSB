@@ -17,6 +17,7 @@
 
 package com.yahoo.ycsb;
 
+import javax.naming.OperationNotSupportedException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Properties;
 
@@ -105,6 +106,15 @@ public abstract class Workload {
    */
   public abstract boolean doTransaction(DB db, Object threadstate);
 
+  /**
+   * Do one transaction operation. Because it will be called concurrently from multiple client
+   * threads, this function must be thread safe. However, avoid synchronized, or the threads will block waiting
+   * for each other, and it will be difficult to reach the target throughput. Ideally, this function would
+   * have no side effects other than DB operations.
+   */
+  public String doTransactionByQuery(DB db, Object threadstate) throws OperationNotSupportedException {
+    throw new OperationNotSupportedException();
+  }
   /**
    * Allows scheduling a request to stop the workload.
    */

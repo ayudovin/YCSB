@@ -44,6 +44,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -181,13 +182,18 @@ class StatusThread extends Thread {
     long deadline = startTimeNanos + sleeptimeNs;
     long startIntervalMs = startTimeMs;
     long lastTotalOps = 0;
+    Map<String, Integer> totalOpsByQuery = new ConcurrentHashMap<>();
 
     boolean alldone;
 
     do {
       long nowMs = System.currentTimeMillis();
 
-      lastTotalOps = computeStats(startTimeMs, startIntervalMs, nowMs, lastTotalOps);
+      if (measurements.getMeasurementType().equals(Measurements.MeasurementType.TIMESERIES_AND_CSV)) {
+        totalOpsByQuery = computeStatsForTimeSeriesCsv(startTimeMs, startIntervalMs, nowMs, totalOpsByQuery);
+      } else {
+        lastTotalOps = computeStats(startTimeMs, startIntervalMs, nowMs, lastTotalOps);
+      }
 
       if (trackJVMStats) {
         measureJVM();
@@ -218,12 +224,6 @@ class StatusThread extends Thread {
    */
   private long computeStats(final long startTimeMs, long startIntervalMs, long endIntervalMs,
                             long lastTotalOps) {
-    Measurements.MeasurementType type = Measurements.getMeasurements().getMeasurementType();
-
-    if (type.equals(Measurements.MeasurementType.TIMESERIES_AND_CSV)) {
-      return computeStatsForTimeSeriesCsv(startTimeMs, startIntervalMs, endIntervalMs, lastTotalOps);
-    }
-
     return computeStatsDefault(startTimeMs, startIntervalMs, endIntervalMs, lastTotalOps);
   }
 
@@ -286,49 +286,51 @@ class StatusThread extends Thread {
    * @param startTimeMs     The start time of the test.
    * @param startIntervalMs The start time of this interval.
    * @param endIntervalMs   The end time (now) for the interval.
-   * @param lastTotalOps    The last total operations count.
    * @return The current operation count.
    */
-  private long computeStatsForTimeSeriesCsv(final long startTimeMs, long startIntervalMs, long endIntervalMs,
-                            long lastTotalOps) {
+  private  Map<String, Integer> computeStatsForTimeSeriesCsv(final long startTimeMs, long startIntervalMs,
+                                                             long endIntervalMs,
+                                                             Map<String, Integer> lastTotalOpsByQuery) {
     List<Map<String, Object>> rowsForBigQuery = new ArrayList<>();
-    long totalops = 0;
     long todoops = 0;
-
+    Map<String, Integer> totalOpsByQuery = new ConcurrentHashMap<>();
     // Calculate the total number of operations completed.
     for (ClientThread t : clients) {
-      totalops += t.getOpsDone();
+
+      System.out.println(t.getOpsDoneByQuery());
+      t.getOpsDoneByQuery().forEach((k, v) -> totalOpsByQuery.merge(k, v, (integer, integer2) -> integer + integer2));
+
       todoops += t.getOpsTodo();
     }
 
-
-    long interval = endIntervalMs - startTimeMs;
-    double throughput = 1000.0 * (((double) totalops) / (double) interval);
-    double curthroughput = 1000.0 * (((double) (totalops - lastTotalOps)) /
-        ((double) (endIntervalMs - startIntervalMs)));
-    long estremaining = (long) Math.ceil(todoops / throughput);
-
-
-    DecimalFormat d = new DecimalFormat("#.##");
-    StringBuilder msg = new StringBuilder().append(interval / 1000).append(";");
-    msg.append(totalops).append(";");
-
-    if (totalops != 0) {
-      msg.append(d.format(curthroughput)).append(";");
-    }
-
-    String common = msg.toString();
     String[] summary = Measurements.getMeasurements().getSummary().split("/");
     StringBuilder result = new StringBuilder();
     for (String aSummary : summary) {
       if (!aSummary.isEmpty()) {
         String[] latency = aSummary.split(";");
 
+        long interval = endIntervalMs - startTimeMs;
+        double throughput = 1000.0 * (((double) totalOpsByQuery.get(latency[0])) / (double) interval);
+        double curthroughput = 1000.0 * (((double) (totalOpsByQuery.get(latency[0]) -
+            lastTotalOpsByQuery.getOrDefault(latency[0], 0))) /
+            ((double) (endIntervalMs - startIntervalMs)));
+
+
+        DecimalFormat d = new DecimalFormat("#.##");
+        StringBuilder msg = new StringBuilder().append(interval / 1000).append(";");
+        msg.append(totalOpsByQuery.getOrDefault(latency[0], 0)).append(";");
+
+        if (totalOpsByQuery.getOrDefault(latency[0], 0) != 0) {
+          msg.append(d.format(curthroughput)).append(";");
+        }
+
+        String common = msg.toString();
+
         Map<String, Object> resultInOneInterval = new HashMap<>();
         resultInOneInterval.put("type", latency[0]);
         resultInOneInterval.put("latency", latency[1]);
         resultInOneInterval.put("throughput", curthroughput);
-        resultInOneInterval.put("operations", totalops);
+        resultInOneInterval.put("operations", totalOpsByQuery.getOrDefault(latency[0], 0));
         resultInOneInterval.put("time", interval/1000);
         resultInOneInterval.put("threads", threadcount);
         rowsForBigQuery.add(resultInOneInterval);
@@ -348,7 +350,7 @@ class StatusThread extends Thread {
     if (standardstatus) {
       System.out.print(result);
     }
-    return totalops;
+    return totalOpsByQuery;
   }
 
   private void writeToFile(String result) {
@@ -541,6 +543,7 @@ class ClientThread implements Runnable {
   private Properties props;
   private long targetOpsTickNs;
   private final Measurements measurements;
+  private Map<String, Integer> opsDoneByQuery;
 
   /**
    * Constructor.
@@ -560,6 +563,7 @@ class ClientThread implements Runnable {
     this.workload = workload;
     this.opcount = opcount;
     opsdone = 0;
+    opsDoneByQuery = new ConcurrentHashMap<>();
     if (targetperthreadperms > 0) {
       targetOpsPerMs = targetperthreadperms;
       targetOpsTickNs = (long) (1000000 / targetOpsPerMs);
@@ -580,6 +584,10 @@ class ClientThread implements Runnable {
   
   public int getOpsDone() {
     return opsdone;
+  }
+
+  public Map<String, Integer> getOpsDoneByQuery() {
+    return opsDoneByQuery;
   }
 
   @Override
@@ -616,11 +624,18 @@ class ClientThread implements Runnable {
 
         while (((opcount == 0) || (opsdone < opcount)) && !workload.isStopRequested()) {
 
-          if (!workload.doTransaction(db, workloadstate)) {
-            break;
-          }
+          Measurements.MeasurementType type = Measurements.getMeasurements().getMeasurementType();
 
-          opsdone++;
+          if (type.equals(Measurements.MeasurementType.TIMESERIES_AND_CSV)) {
+            String query = workload.doTransactionByQuery(db, workloadstate);
+            opsDoneByQuery.putIfAbsent(query, 0);
+            opsDoneByQuery.merge(query, 1, (i, j) -> i + j);
+          } else {
+            if (!workload.doTransaction(db, workloadstate)) {
+              break;
+            }
+            opsdone++;
+          }
 
           throttleNanos(startTimeNanos);
         }
