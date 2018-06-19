@@ -297,7 +297,6 @@ class StatusThread extends Thread {
     // Calculate the total number of operations completed.
     for (ClientThread t : clients) {
 
-      System.out.println(t.getOpsDoneByQuery());
       t.getOpsDoneByQuery().forEach((k, v) -> totalOpsByQuery.merge(k, v, (integer, integer2) -> integer + integer2));
 
       todoops += t.getOpsTodo();

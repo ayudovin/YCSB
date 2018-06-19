@@ -24,7 +24,7 @@
 
 recordcount=50000000
 operationcount=50000000
-workload=com.yahoo.ycsb.workloads.CoreWorkload
+workload=com.yahoo.ycsb.workloads.CoreWorkloadExtension
 
 readallfields=true
 
@@ -44,6 +44,6 @@ status.interval=1
 
 bigquery.projectid=cpb100-196812
 bigquery.dataSetName=benchmark
-bigquery.tableName=workloade_cassandra_v1_5clients
+bigquery.tableName=workloade_cassandra_v2_5clients
 bigquery.pathToKey=./key-gcp/admin.json
 bigquery.model=time:INTEGER;operations:INTEGER;throughput:FLOAT;type:STRING;latency:FLOAT;threads:INTEGER;
