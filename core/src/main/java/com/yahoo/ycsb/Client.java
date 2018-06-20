@@ -309,8 +309,8 @@ class StatusThread extends Thread {
         String[] latency = aSummary.split(";");
 
         long interval = endIntervalMs - startTimeMs;
-        double throughput = 1000.0 * (((double) totalOpsByQuery.get(latency[0])) / (double) interval);
-        double curthroughput = 1000.0 * (((double) (totalOpsByQuery.get(latency[0]) -
+        double throughput = 1000.0 * (((double) totalOpsByQuery.getOrDefault(latency[0], 0)) / (double) interval);
+        double curthroughput = 1000.0 * (((double) (totalOpsByQuery.getOrDefault(latency[0], 0) -
             lastTotalOpsByQuery.getOrDefault(latency[0], 0))) /
             ((double) (endIntervalMs - startIntervalMs)));
 
